@@ -1972,7 +1972,9 @@ def _iter_sc2_shell_matches(
     covered = 0
     for start, end in command_ranges:
         if end is None:
-            yield from compiled.finditer(content, max(start, covered))
+            yield from static_runner.iter_pattern_matches(
+                compiled, content, start=max(start, covered)
+            )
             return
         if start < covered:
             continue
@@ -2014,7 +2016,7 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
             matches = (
                 static_runner.iter_paragraph_matches
                 if (pattern, confidence) in SC1_PROSE_PATTERNS
-                else re.finditer
+                else static_runner.iter_pattern_matches
             )
             for match in matches(pattern, content, re.MULTILINE):
                 line_num = line_number(match.start())
@@ -2039,7 +2041,9 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                 pattern, content, re.IGNORECASE | re.MULTILINE
             )
         else:
-            matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
+            matches = static_runner.iter_pattern_matches(
+                pattern, content, re.IGNORECASE | re.MULTILINE
+            )
         for match in matches:
             line_num = line_number(match.start())
             mt = match.group(0)
@@ -2129,7 +2133,7 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
             matches = (
                 static_runner.iter_paragraph_matches
                 if (pattern, confidence) in SC3_PROSE_PATTERNS
-                else re.finditer
+                else static_runner.iter_pattern_matches
             )
             for match in matches(pattern, content, re.IGNORECASE | re.MULTILINE):
                 line_num = line_number(match.start())
@@ -2148,7 +2152,9 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                 )
     # SC7: untrusted container image. Example filtering is delegated to the runner.
     for pattern, confidence in SC7_PATTERNS:
-        for match in re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE):
+        for match in static_runner.iter_pattern_matches(
+            pattern, content, re.IGNORECASE | re.MULTILINE
+        ):
             line_num = line_number(match.start())
             findings.append(
                 AnalyzerFinding(
