@@ -39,6 +39,7 @@ from skillspector.suppression import (
     finding_fingerprint,
     load_baseline,
     partition_findings,
+    source_content_key,
 )
 
 SCANNER_VERSION = "test-scanner-version"
@@ -147,8 +148,8 @@ def test_transitive_fingerprint_and_baseline_are_source_aware() -> None:
     assert serialized["occurrences"][0]["source_digest"] == f"sha256:{'c' * 64}"
 
     file_cache = {
-        f"{first_identity}::skill-a/SKILL.md": SKILL_CONTENT,
-        f"{second_identity}::skill-a/SKILL.md": SKILL_CONTENT,
+        source_content_key(first_identity, "skill-a/SKILL.md"): SKILL_CONTENT,
+        source_content_key(second_identity, "skill-a/SKILL.md"): SKILL_CONTENT,
     }
     baseline = baseline_from_dict(
         build_baseline_dict([first], file_cache=file_cache, scanner_version=SCANNER_VERSION)
@@ -177,7 +178,7 @@ def test_root_glob_baseline_never_suppresses_transitive_finding() -> None:
     kept, suppressed = partition_findings(
         [child],
         baseline,
-        file_cache={f"{identity}::{child.file}": SKILL_CONTENT},
+        file_cache={source_content_key(identity, child.file): SKILL_CONTENT},
         scanner_version=SCANNER_VERSION,
     )
 
@@ -197,7 +198,7 @@ def test_transitive_exact_baseline_requires_immutable_source_provenance() -> Non
     kept, suppressed = partition_findings(
         [legacy_child],
         baseline,
-        file_cache={f"{legacy_child.source_url}::{legacy_child.file}": SKILL_CONTENT},
+        file_cache={source_content_key(legacy_child.source_url, legacy_child.file): SKILL_CONTENT},
         scanner_version=SCANNER_VERSION,
     )
 
@@ -206,7 +207,9 @@ def test_transitive_exact_baseline_requires_immutable_source_provenance() -> Non
     with pytest.raises(ValueError, match="source_identity and source_digest"):
         build_baseline_dict(
             [legacy_child],
-            file_cache={f"{legacy_child.source_url}::{legacy_child.file}": SKILL_CONTENT},
+            file_cache={
+                source_content_key(legacy_child.source_url, legacy_child.file): SKILL_CONTENT
+            },
             scanner_version=SCANNER_VERSION,
         )
 
@@ -227,6 +230,24 @@ def test_transitive_fingerprint_does_not_borrow_same_named_root_content() -> Non
             file_cache={child.file: SKILL_CONTENT},
             scanner_version=SCANNER_VERSION,
         )
+
+
+@pytest.mark.parametrize("delimiter", ["/", "::"])
+def test_transitive_fingerprint_does_not_borrow_lookalike_local_path(delimiter: str) -> None:
+    identity = f"external/{'a' * 64}"
+    child = replace(_finding(), source_identity=identity, source_digest=f"sha256:{'b' * 64}")
+    with pytest.raises(ValueError, match="source content missing"):
+        build_baseline_dict(
+            [child],
+            file_cache={f"{identity}{delimiter}{child.file}": SKILL_CONTENT},
+            scanner_version=SCANNER_VERSION,
+        )
+
+
+def test_source_content_key_preserves_scope_and_exact_path() -> None:
+    assert source_content_key("a/b", "c") != source_content_key("a", "b/c")
+    assert source_content_key("scope", "a\\b") != source_content_key("scope", "a/b")
+    assert source_content_key("scope", "./a") != source_content_key("scope", "a")
 
 
 def test_fingerprint_canonical_encoding_avoids_delimiter_collision() -> None:
