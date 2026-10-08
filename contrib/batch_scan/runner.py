@@ -37,8 +37,14 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from skillspector.graph import graph
-from skillspector.llm_analyzer_base import LLMAnalyzerBase, LLMAnalysisResult
+from skillspector.llm_analyzer_base import (
+    LLMAnalyzerBase,
+    LLMAnalysisResult,
+    _StructuredResponseValidationError,
+)
 from skillspector.logging_config import get_logger
 from skillspector.nodes.meta_analyzer import LLMMetaAnalyzer, MetaAnalyzerResult
 
@@ -124,7 +130,7 @@ _patches_depth: int = 0  # nesting counter — safe for re-entrant context manag
 _original_base_init = LLMAnalyzerBase.__init__
 
 
-def _patched_base_init(self, base_prompt, model, *, node="llm_analyzer"):
+def _patched_base_init(self, base_prompt, model, *, node="llm_analyzer", timeout=None):
     """Set response_schema=None on the instance dict BEFORE original init.
 
     Relies on Python MRO guarantee: instance.__dict__ is always checked
@@ -132,7 +138,7 @@ def _patched_base_init(self, base_prompt, model, *, node="llm_analyzer"):
     a library internal.
     """
     self.response_schema = None
-    _original_base_init(self, base_prompt, model, node=node)
+    _original_base_init(self, base_prompt, model, node=node, timeout=timeout)
 
 
 # -- Patch 2: LLMAnalyzerBase.parse_response handles raw JSON --------------
@@ -146,23 +152,11 @@ def _patched_base_parse(self, response, batch):
     text = _strip_markdown_fences(str(response))
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "LLMAnalyzerBase.parse_response: invalid JSON for %s: %s",
-            batch.file_label,
-            exc,
-        )
-        return []
-    try:
         result = LLMAnalysisResult.model_validate(data)
-        return [f.to_finding(batch.file_path) for f in result.findings]
-    except Exception as exc:
-        logger.warning(
-            "LLMAnalyzerBase.parse_response: schema validation failed for %s: %s",
-            batch.file_label,
-            exc,
-        )
-        return []
+    except (json.JSONDecodeError, ValidationError) as exc:
+        # Keep raw-response providers on the core retry and failure-ledger path.
+        raise _StructuredResponseValidationError from exc
+    return [f.to_finding(batch.file_path) for f in result.findings]
 
 
 # -- Patch 3: LLMMetaAnalyzer.parse_response handles raw JSON ---------------
@@ -186,28 +180,15 @@ def _patched_meta_parse(self, response, batch):
     text = _strip_markdown_fences(str(response))
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "LLMMetaAnalyzer.parse_response: invalid JSON for %s: %s",
-            batch.file_label,
-            exc,
-        )
-        return []
-    try:
         result = MetaAnalyzerResult.model_validate(data)
-        items = []
-        for f in result.findings:
-            d = _sanitize_meta_finding(f.model_dump())
-            d["_file"] = batch.file_path
-            items.append(d)
-        return items
-    except Exception as exc:
-        logger.warning(
-            "LLMMetaAnalyzer.parse_response: schema validation failed for %s: %s",
-            batch.file_label,
-            exc,
-        )
-        return []
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise _StructuredResponseValidationError from exc
+    items = []
+    for f in result.findings:
+        d = _sanitize_meta_finding(f.model_dump())
+        d["_file"] = batch.file_path
+        items.append(d)
+    return items
 
 
 # -- Patch 4: append JSON output format to base prompt ---------------------
